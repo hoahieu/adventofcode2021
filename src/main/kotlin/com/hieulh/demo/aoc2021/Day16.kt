@@ -1,8 +1,29 @@
 package com.hieulh.demo.aoc2021
 
+import java.io.File
+import java.math.BigDecimal
+
 
 object Day16 {
     fun run1(data: List<Int>) {
+        val packetList = readData(data)
+        var v = 0
+        val packetQueue = ArrayDeque<Packet>()
+        packetQueue.addAll(packetList)
+        while (packetQueue.isNotEmpty()) {
+            val p = packetQueue.removeFirst()
+            v += p.version
+            if (p is OperatorPacket) packetQueue.addAll(p.subPackets)
+        }
+        println("version sum = $v")
+    }
+
+    fun run2(data: List<Int>) {
+        val packetList = readData(data)
+        println("Calculated value = ${packetList.first().calculated}")
+    }
+
+    private fun readData(data: List<Int>): List<Packet> {
         val binaryData = ArrayDeque(data)
         val packetList = mutableListOf<Packet>()
         while (binaryData.size > 10) {
@@ -13,25 +34,11 @@ object Day16 {
                 e.printStackTrace()
             }
         }
-        packetList
-    }
-
-    fun readData(data: ArrayDeque<Int>): Packet {
-        val version = data.takeFirstAndRemove(3).getBinaryValue()
-        val type = data.takeFirstAndRemove(3).getBinaryValue()
-        println("Version = $version")
-        println("Type = $type")
-        printBinary(data)
-        return if (type == 4) {
-            LiteralPacket.readData(version, type, data)
-        } else {
-            val lengthType = data.takeFirstAndRemove(1).getBinaryValue()
-            OperatorPacket.readData(version, type, data)
-        }
+        return packetList
     }
 }
 
-open class Packet(
+abstract class Packet(
     val version: Int,
     val type: Int, // 4 is literal, the rest is operator
     val data: ArrayDeque<Int>,
@@ -50,25 +57,62 @@ open class Packet(
     }
 
     val parentPacket: Packet? = null
+
+    val typeString: String
+        get() = when (type) {
+            0 -> "sum"
+            1 -> "product"
+            2 -> "minimum"
+            3 -> "maximum"
+            4 -> "literal"
+            5 -> "greater than"
+            6 -> "less than"
+            7 -> "equal to"
+            else -> "unknown"
+        }
+
+    abstract val calculated: BigDecimal
 }
 
 class LiteralPacket(
     version: Int,
     type: Int,
-    val literals: List<Int>
+    private val literals: List<Int>
 ) : Packet(version, type, ArrayDeque()) {
     companion object {
         fun readData(version: Int, type: Int, binaryData: ArrayDeque<Int>): LiteralPacket {
             val literals = mutableListOf<Int>()
             var shouldStop = false
             while (!shouldStop) {
-                val isLastLiteral = binaryData.takeFirstAndRemove() == 1
-                literals.add(binaryData.takeFirstAndRemove(4).getBinaryValue())
-                shouldStop = isLastLiteral
+                if (binaryData.size >= 4) {
+                    val isLastLiteral = binaryData.takeFirstAndRemove() == 0 //
+                    literals.add(binaryData.takeFirstAndRemove(4).getBinaryValue())
+                    shouldStop = isLastLiteral
+                } else {
+                    shouldStop = true
+                }
+
             }
             return LiteralPacket(version, type, literals)
         }
     }
+
+//    fun getTotalValue(): BigDecimal {
+//        var total = BigDecimal.ZERO
+//        val size = literals.size
+//        literals.forEachIndexed { index, num ->
+//            total += BigDecimal(num)*(BigDecimal(16).pow(size - index - 1))
+//        }
+//        return total
+//    }
+
+    private fun getTotalValue(): BigDecimal =
+        literals.foldRightIndexed(BigDecimal.ZERO) { index: Int, num: Int, acc: BigDecimal ->
+            acc + BigDecimal(num) * (BigDecimal(16).pow(literals.size - index - 1))
+        }
+
+    override val calculated: BigDecimal
+        get() = getTotalValue()
 }
 
 class TotalLengthPacket(
@@ -118,8 +162,10 @@ class CounterPacket(
             val packets = mutableListOf<Packet>()
             for (i in 0 until count) {
                 try {
-                    val packet = Packet.readData(binaryData)
-                    packets.add(packet)
+                    if (binaryData.size >= 6) {
+                        val packet = Packet.readData(binaryData)
+                        packets.add(packet)
+                    }
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
@@ -157,6 +203,45 @@ open class OperatorPacket(
     }
 
     val subPackets = mutableListOf<Packet>()
+
+    /*
+    type ID 0 are sum packets - their value is the sum of the values of their sub-packets. If they only have a single sub-packet, their value is the value of the sub-packet.
+    type ID 1 are product packets - their value is the result of multiplying together the values of their sub-packets. If they only have a single sub-packet, their value is the value of the sub-packet.
+    type ID 2 are minimum packets - their value is the minimum of the values of their sub-packets.
+    type ID 3 are maximum packets - their value is the maximum of the values of their sub-packets.
+    type ID 5 are greater than packets - their value is 1 if the value of the first sub-packet is greater than the value of the second sub-packet; otherwise, their value is 0. These packets always have exactly two sub-packets.
+    type ID 6 are less than packets - their value is 1 if the value of the first sub-packet is less than the value of the second sub-packet; otherwise, their value is 0. These packets always have exactly two sub-packets.
+    type ID 7 are equal to packets - their value is 1 if the value of the first sub-packet is equal to the value of the second sub-packet; otherwise, their value is 0. These packets always have exactly two sub-packets.
+    */
+    override val calculated: BigDecimal
+        get() = when (type) {
+            0 -> {
+                if (subPackets.size == 1) subPackets.first().calculated
+                else subPackets.fold(BigDecimal.ZERO) { acc: BigDecimal, packet: Packet -> acc + packet.calculated }
+            }
+            1 -> {
+                if (subPackets.size == 1) subPackets.first().calculated
+                else subPackets.fold(BigDecimal.ONE) { acc: BigDecimal, packet: Packet -> acc * packet.calculated }
+            }
+            2 -> subPackets.map { it.calculated }.minOrNull() ?: throw Exception("no subpacket")
+            3 -> subPackets.map { it.calculated }.maxOrNull() ?: throw Exception("no subpacket")
+            5 -> when {
+                subPackets.size != 2 -> throw Exception("type ID 5 expects 2 subpackets")
+                subPackets[0].calculated > subPackets[1].calculated -> BigDecimal(1)
+                else -> BigDecimal.ZERO
+            }
+            6 -> when {
+                subPackets.size != 2 -> throw Exception("type ID 6 expects 2 subpackets")
+                subPackets[0].calculated < subPackets[1].calculated -> BigDecimal.ONE
+                else -> BigDecimal.ZERO
+            }
+            7 -> when {
+                subPackets.size != 2 -> throw Exception("type ID 5 expects 2 subpackets")
+                subPackets[0].calculated == subPackets[1].calculated -> BigDecimal.ONE
+                else -> BigDecimal.ZERO
+            }
+            else -> throw UnsupportedOperationException("No type ID $type")
+        }
 }
 
 fun convertHexToInt(hexString: String): List<Int> {
@@ -213,15 +298,25 @@ fun ArrayDeque<Int>.takeFirstAndRemove(count: Int): List<Int> {
 }
 
 
-
 fun main() {
-    val data = convertHexToInt(sample16_3)
-    printBinary(data)
+//    Day16.run1(convertHexToInt("8A004A801A8002F478"))
+//    Day16.run1(convertHexToInt("620080001611562C8802118E34"))
+//    Day16.run1(convertHexToInt("C0015000016115A2E0802F182340"))
+//    Day16.run1(convertHexToInt("A0016C880162017C3686B18A3D4780"))
 
-    Day16.run1(data)
+    println("Challenge 1 Result")
+    Day16.run1(convertHexToInt(File("input/day_16.txt").readLines()[0]))
+
+//    Day16.run2(convertHexToInt("C200B40A82"))
+//    Day16.run2(convertHexToInt("04005AC33890"))
+//    Day16.run2(convertHexToInt("880086C3E88112"))
+//    Day16.run2(convertHexToInt("CE00C43D881120"))
+//    Day16.run2(convertHexToInt("D8005AC2A8F0"))
+//    Day16.run2(convertHexToInt("F600BC2D8F"))
+//    Day16.run2(convertHexToInt("9C005AC2F8F0"))
+//    Day16.run2(convertHexToInt("9C0141080250320F1802104A08"))
+
+    println("Challenge 2 Result")
+    Day16.run2(convertHexToInt(File("input/day_16.txt").readLines()[0]))
+
 }
-
-val sample16_1 = "8A004A801A8002F478"
-val sample16_2 = "620080001611562C8802118E34"
-val sample16_3 = "C0015000016115A2E0802F182340"
-val sample16_4 = "A0016C880162017C3686B18A3D4780"
